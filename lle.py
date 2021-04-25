@@ -21,6 +21,7 @@ import sys
 import time
 import argparse
 import collections
+from itertools import combinations
 
 
 class MetaEmbed():
@@ -305,6 +306,7 @@ def perform_embedding(sources, dims, nns, comps, output_fname):
 
 def save_embedding(words, WR, fname):
     F = open(fname, 'w')
+    F.write("%d %d\n" % (len(WR.vects), WR.dim))
     for w in words:
         if w in WR.vects:
             F.write("%s " % w)
@@ -315,7 +317,58 @@ def save_embedding(words, WR, fname):
     F.close()
     pass
 
-def main():
+
+def batch_process():
+    """
+    Create all combinations of meta embeddings from the sources.
+    """
+    sources_info = [("wiki", "wiki-news-300d-1M-subword.vec.selected", 300), 
+                    ("glove", "glove.840B.300d.txt.selected", 300),
+                    ("crawl", "crawl-300d-2M-subword.vec.selected", 300),
+                    ("news", "GoogleNews-vectors-negative300.bin.selected", 300)]
+    
+    #sources_info = [("wiki", "wiki.small", 300), 
+    #                ("glove", "glove.small", 300),
+    #                ("crawl", "crawl.small", 300),
+    #                ("news", "w2v.small", 300)]
+
+    comps = [100] # dimensionality of the meta embedding
+    nns = 1000  # number of nearest neighbours to consider in LLE
+    
+    # Load all sources
+    embeddings = []
+    for (embed_name, embd_fname, dim) in sources_info:
+        start_time = time.process_time()
+        sys.stdout.write("Loading %s -- (%d dim) ..." % (embd_fname, dim))
+        sys.stdout.flush()        
+        WR = WordReps()
+        WR.read_model("./data/" + embd_fname, dim)
+        end_time = time.process_time()
+        sys.stdout.write("\nDone. took %s seconds\n" % str(end_time - start_time))
+        sys.stdout.flush()
+        embeddings.append((embed_name, WR))
+
+    common_words = set(embeddings[0][1].vocab)
+    for i in range(1, len(embeddings)):
+        common_words = common_words.intersection(set(embeddings[i][1].vocab))
+    selected_words = get_selected_words("./data/bias-selected-words")
+    words = []
+    for word in selected_words:
+        if word in common_words and word not in words:
+            words.append(word)
+    print("No. of common words =", len(common_words))
+    print("Vocabulary size =", len(words))    
+
+    # Create all combinations of meta embeddings
+    for no_sources in [2,3,4]:
+        for  sources in combinations(embeddings, no_sources):
+            output_fname = "./work/LLE/%s" % "+".join([x[0] for x in sources])
+            print(output_fname)
+            ME = meta_embed([x[1] for x in sources], words, nns, comps, output_fname)
+    pass
+
+
+def command_line():
     parser = argparse.ArgumentParser()
     parser.add_argument("-nns", type=int, help="number of nearest neighbours")
     parser.add_argument("-comps", nargs="+", type=int, help="components for the projection")
@@ -326,6 +379,72 @@ def main():
     perform_embedding(args.i, args.d, args.nns, args.comps, args.o)
     pass
 
+
+def merge_word_lists():
+    freq_words = get_selected_words("data/selected-words")
+    bias_words = get_selected_words("data/bias_vocab.txt")
+    print(len(freq_words), len(bias_words))
+    words = set(freq_words).union(set(bias_words))
+    print(len(words))
+    with open("data/bias-selected-words", 'w') as F:
+        for w in words:
+            F.write("{0}\n".format(w))
+    pass
+
+
+def load_embed_vocab(fname):
+    print(fname)
+    embed_vocab = []
+    with open(fname) as F:
+        for line in F:
+            embed_vocab.append(line.lower().split()[0])
+    return embed_vocab
+
+def check_vocabs():
+    """
+    Check whether embeds contain words from the vocab.
+    """
+    lle_vocab = load_embed_vocab("work/LLE/wiki+glove+crawl+news_n=1000_k=300")
+    print("LLE =", len(lle_vocab))
+
+    wiki_vocab = load_embed_vocab("data/wiki-news-300d-1M-subword.vec.selected")
+    print("wiki =", len(wiki_vocab))
+
+    glove_vocab = load_embed_vocab("data/glove.840B.300d.txt.selected")
+    print("glove =", len(glove_vocab))
+
+    crawl_vocab = load_embed_vocab("data/crawl-300d-2M-subword.vec.selected")
+    print("crawl =", len(crawl_vocab))
+
+    news_vocab = load_embed_vocab("data/GoogleNews-vectors-negative300.bin.selected")
+    print("news =", len(news_vocab))
+
+    vocab = set(wiki_vocab)
+    vocab = vocab.intersection(set(glove_vocab))
+    vocab = vocab.intersection(set(crawl_vocab))
+    vocab = vocab.intersection(set(news_vocab))
+
+    print("Common =", len(vocab))
+
+    bias_vocab = []
+    with open("data/bias_vocab.txt") as bias_file:
+        for line in bias_file:
+            bias_vocab.append(line.lower().strip())
+
+    missing_bias_words = []
+    for word in bias_vocab:
+        if word not in vocab:
+            missing_bias_words.append(word)
+            print(word)
+            
+    
+    print("Total no. of words missing from bias words =", len(missing_bias_words))
+
+
+
 if __name__ == '__main__':
-    main()
+    #command_line()
+    #batch_process()
+    #merge_word_lists()
+    check_vocabs()
     pass

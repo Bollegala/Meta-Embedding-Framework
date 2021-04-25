@@ -143,6 +143,15 @@ class WordReps:
             self.vects[word] = w * normalize(self.vects[word])
         pass
 
+    def save(self, fname):
+        with open(fname, 'w') as F:
+            F.write("%d %d\n" % (len(WR.vects), WR.dim))
+        for w in WR.vects:
+            F.write("%s " % w)
+            F.write("%s\n" % " ".join([str(x) for x in WR.vects[w]]))
+        pass
+
+
 
     def test_model(self):
         A = self.get_vect("man")
