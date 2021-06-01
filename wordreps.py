@@ -18,32 +18,43 @@ class WordReps:
         self.vector_size = None
         pass
 
+    def load_matrix(self, M, word_dic):
+        """
+        Loads data from a matrix M and a dictionary word_dic (key=word, value=row index)
+        """
+        self.vocab = list(word_dic.keys())
+        self.vector_size, self.dim = M.shape
+        self.vects = {}
+        for word in word_dic:
+            self.vects[word] = M[word_dic[word],:]
+        pass
 
-    def read_model(self, fname, dim, words=None, HEADER=False, case_sensitive=False):
+    def save_model(self, fname):
+        """
+        Save the embeddings to fname.
+        """
+        with open(fname, 'w') as F:
+            for w in self.vects:
+                F.write("%s %s\n" % (w, " ".join([str(x) for x in self.vects[w]])))
+        pass
+
+
+    def read_model(self, fname, dim=None, words=None, case_sensitive=False):
         """
         Read the word vectors where the first token is the word.
         """
         res = {}
         F = open(fname)
-        if HEADER:
-            res["method"] = F.readline().split('=')[1].strip()
-            res["input"] = F.readline().split('=')[1].strip()
-            res["rank"] = int(F.readline().split('=')[1])
-            res["itermax"] = int(F.readline().split('=')[1])
-            res["vertices"] = int(F.readline().split('=')[1])
-            res["edges"] = int(F.readline().split('=')[1])
-            res["labels"] = int(F.readline().split('=')[1])
-            R = res["rank"]
-        R = dim
-        # read the vectors.
         vects = {}
         vocab = []
         line = F.readline()
 
         # Check whether the first line contains the number of words and the dimensionality.
-        # If so, skip it.
         if len(line.split()) == 2:
+            self.dim = int(line.split()[1])
             line = F.readline()
+        else:
+            self.dim = len(line.split()) - 1
             
         while len(line) != 0:
             p = line.split()
@@ -51,16 +62,16 @@ class WordReps:
             if not case_sensitive:
                 word = word.lower()
             if (words is None) or (word in words):
-                v = numpy.zeros(R, float)
-                for i in range(0, R):
+                v = numpy.zeros(self.dim, float)
+                for i in range(0, self.dim):
                     v[i] = float(p[i+1])
-                vects[word] = vects.get(word, numpy.zeros(R, float)) + v
+                vects[word] = vects.get(word, numpy.zeros(self.dim, float)) + v
                 vocab.append(word)
             line = F.readline()
         F.close()
         self.vocab = vocab
         self.vects = vects
-        self.dim = R
+        print("Dimensionality = ", self.dim)
         pass
 
 
@@ -142,15 +153,6 @@ class WordReps:
         for word in self.vocab:
             self.vects[word] = w * normalize(self.vects[word])
         pass
-
-    def save(self, fname):
-        with open(fname, 'w') as F:
-            F.write("%d %d\n" % (len(WR.vects), WR.dim))
-        for w in WR.vects:
-            F.write("%s " % w)
-            F.write("%s\n" % " ".join([str(x) for x in WR.vects[w]]))
-        pass
-
 
 
     def test_model(self):

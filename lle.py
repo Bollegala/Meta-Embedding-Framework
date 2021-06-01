@@ -23,26 +23,47 @@ import argparse
 import collections
 from itertools import combinations
 
+from GlobalME import GLME
+
 
 class MetaEmbed():
 
     def __init__(self, wordreps, words):
-        self.words = words
+        """
+        words is a list of words for which we would like to compute meta embeddings.
+        However, if a particular word in this list is not present in all source embeddings,
+        we will have a null row corresponding to that word in the reconstruction weight matrix.
+        This will in return result in an ill-defined eigenvalue problem and cause a noncovergence
+        error during the eigenvalue decomposition. Therefore, to avoid this problem, we will
+        remove any words that are not covered by at least one of the source embeddings from the words list.
+        """
+        # Find the union of words in all sources
+        source_vocab = set()
+        for rep in wordreps:
+            source_vocab = source_vocab.union(set(rep.vects.keys()))
+        
+        # Select words in 'words' that occur in the union of all source vocabularies.
+        self.words = []
+        for word in words:
+            if word in source_vocab:
+                self.words.append(word)
+
         self.ids = {}
-        for (i,word) in enumerate(words):
+        for (i,word) in enumerate(self.words):
             self.ids[word] = i
 
         self.reps = wordreps
         self.dims = [x.dim for x in self.reps]
         self.embeds = []
-        N = len(words)
+        N = len(self.words)
 
         # Create the source embedding matrices
         write("Creating source embedding matrices...")
         for i in range(len(self.reps)):
             M = numpy.zeros((self.reps[i].dim, N), dtype=numpy.float64)
             for j in range(N):
-                M[:,j] = self.reps[i].vects[self.words[j]]
+                if self.words[j] in self.reps[i].vects:
+                    M[:,j] = self.reps[i].vects[self.words[j]]
             self.embeds.append(M)
         write("done\n")
         pass
@@ -318,21 +339,28 @@ def save_embedding(words, WR, fname):
     pass
 
 
-def batch_process():
+def LLE_batch_process():
     """
     Create all combinations of meta embeddings from the sources.
     """
-    sources_info = [("wiki", "wiki-news-300d-1M-subword.vec.selected", 300), 
-                    ("glove", "glove.840B.300d.txt.selected", 300),
-                    ("crawl", "crawl-300d-2M-subword.vec.selected", 300),
-                    ("news", "GoogleNews-vectors-negative300.bin.selected", 300)]
+    #sources_info = [("wiki", "wiki-news-300d-1M-subword.vec.selected", 300), 
+    #                ("glove", "glove.840B.300d.txt.selected", 300),
+    #                ("crawl", "crawl-300d-2M-subword.vec.selected", 300),
+    #                ("news", "GoogleNews-vectors-negative300.bin.selected", 300)]
+
+    # debiased sources
+    method = "dict"
+    sources_info = [("wiki", "{0}_FTw.txt".format(method), 300), 
+                    ("glove", "{0}_GV.txt".format(method), 300),
+                    ("crawl", "{0}_FTc.txt".format(method), 300),
+                    ("news", "{0}_W2V.txt".format(method), 300)]
     
     #sources_info = [("wiki", "wiki.small", 300), 
     #                ("glove", "glove.small", 300),
     #                ("crawl", "crawl.small", 300),
     #                ("news", "w2v.small", 300)]
 
-    comps = [100] # dimensionality of the meta embedding
+    comps = [100,200,300] # dimensionality of the meta embedding
     nns = 1000  # number of nearest neighbours to consider in LLE
     
     # Load all sources
@@ -342,27 +370,19 @@ def batch_process():
         sys.stdout.write("Loading %s -- (%d dim) ..." % (embd_fname, dim))
         sys.stdout.flush()        
         WR = WordReps()
-        WR.read_model("./data/" + embd_fname, dim)
+        WR.read_model("./work/debiased/" + embd_fname, dim)
         end_time = time.process_time()
         sys.stdout.write("\nDone. took %s seconds\n" % str(end_time - start_time))
         sys.stdout.flush()
         embeddings.append((embed_name, WR))
 
-    common_words = set(embeddings[0][1].vocab)
-    for i in range(1, len(embeddings)):
-        common_words = common_words.intersection(set(embeddings[i][1].vocab))
-    selected_words = get_selected_words("./data/bias-selected-words")
-    words = []
-    for word in selected_words:
-        if word in common_words and word not in words:
-            words.append(word)
-    print("No. of common words =", len(common_words))
+    words = get_selected_words("./data/bias-selected-words")
     print("Vocabulary size =", len(words))    
 
     # Create all combinations of meta embeddings
     for no_sources in [2,3,4]:
         for  sources in combinations(embeddings, no_sources):
-            output_fname = "./work/LLE/%s" % "+".join([x[0] for x in sources])
+            output_fname = "./work/LLE_dict/%s" % "+".join([x[0] for x in sources])
             print(output_fname)
             ME = meta_embed([x[1] for x in sources], words, nns, comps, output_fname)
     pass
@@ -375,10 +395,71 @@ def command_line():
     parser.add_argument("-i", nargs="+", help="source embedding files")
     parser.add_argument("-d", nargs="+", type=int, help="dimensionalities of the source embeddings [comma separated and ordered in the files specificed by option -i")
     parser.add_argument("-o", type=str, help="output file name. If multiple comps are specified we will append the comp as a suffix")
+    parser.add_argument("-m", choices=['lle', 'glme'], required=True, help="specify lle (for Locally Linear Meta Embedding) or glme (for Globally Linear Meta Embedding)")
+    parser.add_argument("-r", type=float, help="learning rate for GLME")
+    parser.add_argument("-e", type=int, help="number of epochs for GLME")
     args = parser.parse_args()
-    perform_embedding(args.i, args.d, args.nns, args.comps, args.o)
+    if args.m == 'lle':
+        perform_embedding(args.i, args.d, args.nns, args.comps, args.o)
+    elif args.m == 'glme':
+        pass
     pass
 
+def write_embeds(M, fname, vocab):    
+    with open(fname, 'w') as F:
+        F.write("{0}\t{1}\n".format(M.shape[0], M.shape[1]))
+        for i in range(M.shape[0]):
+            F.write("%s %s\n" % (vocab[i], " ".join([str(x) for x in M[i,:]])))
+    pass
+
+def process_GLME():
+    """
+    Perform Globally Linear Meta Embedding.
+    Load the sources and extract the matrices, where rows correspond to the words in the union
+    of the sources. Missing words will be assigned a zero embedding.
+    """
+    #sources_info = [("wiki", "wiki-news-300d-1M-subword.vec.selected", 300), 
+    #                ("glove", "glove.840B.300d.txt.selected", 300),
+    #                ("crawl", "crawl-300d-2M-subword.vec.selected", 300),
+    #                ("news", "GoogleNews-vectors-negative300.bin.selected", 300)]
+
+    method = "dict"
+    sources_info = [("wiki", "{0}_FTw.txt".format(method), 300), 
+                    ("glove", "{0}_GV.txt".format(method), 300),
+                    ("crawl", "{0}_FTc.txt".format(method), 300),
+                    ("news", "{0}_W2V.txt".format(method), 300)]
+
+    # Load all sources
+    embeddings = []
+    for (embed_name, embd_fname, dim) in sources_info:
+        start_time = time.process_time()
+        sys.stdout.write("Loading %s -- (%d dim) ..." % (embd_fname, dim))
+        sys.stdout.flush()        
+        WR = WordReps()
+        WR.read_model("./work/debiased/" + embd_fname, dim)
+        end_time = time.process_time()
+        sys.stdout.write("\nDone. took %s seconds\n" % str(end_time - start_time))
+        sys.stdout.flush()
+        embeddings.append((embed_name, WR))
+    
+    words = get_selected_words("./data/bias-selected-words")
+    print("Vocabulary size =", len(words))  
+
+    # Create all combinations of meta embeddings
+    for no_sources in [2,3,4]:
+        for  sources in combinations(embeddings, no_sources):
+            output_fname = "./work/GLME/%s" % "+".join([x[0] for x in sources])
+            print(output_fname)
+            matrices = []
+            for (embed_name, WR) in sources:
+                M = numpy.zeros((len(words), WR.dim))
+                for (row_id, word) in enumerate(words):
+                    if word in WR.vects:
+                        M[row_id,:]  = WR.vects[word]
+                matrices.append(M)
+                M_list, A = GLME([M.T for M in matrices], 300, lr=0.01, epochs=500)          
+                write_embeds(A.T, output_fname, words)
+    pass
 
 def merge_word_lists():
     freq_words = get_selected_words("data/selected-words")
@@ -397,7 +478,7 @@ def load_embed_vocab(fname):
     embed_vocab = []
     with open(fname) as F:
         for line in F:
-            embed_vocab.append(line.lower().split()[0])
+            embed_vocab.append(line.lower().split('\t')[0])
     return embed_vocab
 
 def check_vocabs():
@@ -435,16 +516,15 @@ def check_vocabs():
     for word in bias_vocab:
         if word not in vocab:
             missing_bias_words.append(word)
-            print(word)
-            
-    
+            print(word)          
     print("Total no. of words missing from bias words =", len(missing_bias_words))
 
 
 
 if __name__ == '__main__':
     #command_line()
-    #batch_process()
+    LLE_batch_process()
+    #process_GLME()
     #merge_word_lists()
-    check_vocabs()
+    #check_vocabs()
     pass
